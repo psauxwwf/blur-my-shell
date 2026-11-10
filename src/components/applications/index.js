@@ -360,6 +360,7 @@ export const ApplicationsBlur = class ApplicationsBlur {
                 global.blur_my_shell._pipelines_manager,
                 get_pipeline_id(this.settings.applications),
                 {
+                    capture_before_effects: true,
                     corner_radius: this.settings.applications.CORNER_RADIUS,
                     get_corners: () => this.settings.applications.ROUNDED_CORNERS,
                 }

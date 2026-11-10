@@ -41,10 +41,14 @@ const blitFramebuffer = Cogl.Framebuffer.prototype.blit
     ? (source, ...args) => source.blit(...args)
     : Cogl.blit_framebuffer;
 
-function captureGeometry(actor, framebuffer) {
+function captureGeometry(actor, framebuffer, paintActor = actor) {
     // rows of the modelview-projection matrix, which transforms row vectors
-    const m = framebuffer.get_modelview_matrix()
-        .multiply(framebuffer.get_projection_matrix())
+    let modelview = framebuffer.get_modelview_matrix();
+    // A capture installed on a window paints in the parent's coordinate space.
+    // Include the blur child's offset and padding, also when painting clones.
+    if (paintActor !== actor)
+        modelview = actor.get_transform().multiply(modelview);
+    const m = modelview.multiply(framebuffer.get_projection_matrix())
         .to_float();
     const viewportX = framebuffer.get_viewport_x();
     const viewportY = framebuffer.get_viewport_y();
@@ -188,8 +192,9 @@ function coversCapture(rectangles, geometry) {
 export const BackdropCaptureEffect = GObject.registerClass({
     GTypeName: 'BmsBackdropCaptureEffect',
 }, class BackdropCaptureEffect extends Clutter.Effect {
-    _init(contentActor) {
+    _init(contentActor, sourceActor = null) {
         super._init();
+        this.sourceActor = sourceActor;
         this.target = null;
         this.targets = new Map();
         this.cloneTargets = new Map();
@@ -296,8 +301,9 @@ export const BackdropCaptureEffect = GObject.registerClass({
 
     vfunc_paint_node(node, paintContext) {
         const actor = this.get_actor();
+        const sourceActor = this.sourceActor ?? actor;
         let sourceFramebuffer = get_view_framebuffer(paintContext);
-        if (!sourceFramebuffer) {
+        if (!sourceFramebuffer || !sourceActor.visible) {
             node.add_child(new Clutter.ActorNode(actor, -1));
             return;
         }
@@ -310,12 +316,14 @@ export const BackdropCaptureEffect = GObject.registerClass({
             // an ancestor is painted offscreen, so capture what is behind it from the stage view
             view = painted_view;
             sourceFramebuffer = view.get_framebuffer();
-            geometry = viewCaptureGeometry(actor, view);
+            geometry = viewCaptureGeometry(sourceActor, view);
         } else {
-            geometry = captureGeometry(actor, sourceFramebuffer);
+            geometry = captureGeometry(sourceActor, sourceFramebuffer, actor);
         }
-        if (!geometry)
+        if (!geometry) {
+            node.add_child(new Clutter.ActorNode(actor, -1));
             return;
+        }
         if (inClone) {
             if (this.cloneViewPaint !== get_view_paint()) {
                 this.cloneViewPaint = get_view_paint();
@@ -324,7 +332,7 @@ export const BackdropCaptureEffect = GObject.registerClass({
             this.ensureFramebuffer(this.cloneTargetsFor(view), this.clonesPainted++,
                 geometry.width, geometry.height, sourceFramebuffer, view);
         } else {
-            const actorGeometry = actor.get_abs_allocation_vertices()
+            const actorGeometry = sourceActor.get_abs_allocation_vertices()
                 .flatMap(vertex => [vertex.x, vertex.y, vertex.z]);
             if (!this.actorGeometry?.every((value, i) => value === actorGeometry[i])) {
                 for (const target of this.targets.values())

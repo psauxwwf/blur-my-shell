@@ -12,10 +12,12 @@ export class DynamicPipeline {
         this.pipelineId = pipelineId;
         this.cornerRadius = options.corner_radius ?? null;
         this.getCorners = options.get_corners;
+        this.captureBeforeEffects = options.capture_before_effects ?? false;
         this.opacityFactor = 1;
         this.actor = null;
         this.contentActor = null;
         this.captureEffect = null;
+        this.captureOwner = null;
         this.pipeline = null;
         this.roundedPipeline = null;
         this.pipelineChangedIds = [];
@@ -26,7 +28,7 @@ export class DynamicPipeline {
         this.ownsActor = false;
     }
 
-    create_actor(name) {
+    create_actor(name, captureOwner = null) {
         this.actor = new St.Widget({
             name,
             reactive: false,
@@ -47,6 +49,7 @@ export class DynamicPipeline {
             this.disconnectPipelineChanged();
             this.roundedPipeline?.destroy();
             this.pipeline?.destroy();
+            this.detach_capture();
             this.roundedPipeline = null;
             this.pipeline = null;
             this.actor = null;
@@ -56,9 +59,28 @@ export class DynamicPipeline {
             this.mapId = 0;
         });
 
-        this.captureEffect = new BackdropCaptureEffect(this.contentActor);
-        this.actor.add_effect(this.captureEffect);
+        this.captureOwner = captureOwner ?? this.actor;
+        this.captureEffect = new BackdropCaptureEffect(this.contentActor, this.actor);
+        if (captureOwner) {
+            // Capture the backdrop before effects such as Rounded Window Corners
+            // redirect the whole window into an offscreen texture. Preserve the
+            // relative order of all existing effects.
+            const effects = captureOwner.get_effects();
+            effects.forEach(effect => captureOwner.remove_effect(effect));
+            captureOwner.add_effect_with_name('bms-window-backdrop-capture', this.captureEffect);
+            effects.forEach(effect => captureOwner.add_effect(effect));
+        } else {
+            this.actor.add_effect(this.captureEffect);
+        }
         return this.actor;
+    }
+
+    detach_capture() {
+        this.captureEffect?.release();
+        if (this.captureOwner && this.captureEffect)
+            this.captureOwner.remove_effect(this.captureEffect);
+        this.captureOwner = null;
+        this.captureEffect = null;
     }
 
     attach_pipeline() {
@@ -96,7 +118,7 @@ export class DynamicPipeline {
     }
 
     create_background_with_effect(container, name) {
-        const actor = this.create_actor(name);
+        const actor = this.create_actor(name, this.captureBeforeEffects ? container : null);
         const manager = new Clutter.Actor();
         manager.backgroundActor = actor;
         manager._bms_pipeline = this;
@@ -231,10 +253,7 @@ export class DynamicPipeline {
         this.roundedPipeline?.destroy();
         this.roundedPipeline = null;
         this.pipeline?.destroy();
-        this.captureEffect?.release();
-        if (this.actor && this.captureEffect)
-            this.actor.remove_effect(this.captureEffect);
-        this.captureEffect = null;
+        this.detach_capture();
         this.pipeline = null;
         this.contentActor = null;
         if (this.ownsActor && this.actor)
